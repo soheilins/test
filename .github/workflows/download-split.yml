@@ -1,0 +1,88 @@
+name: Download Large File, Split, and Commit to Repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: 'Direct download URL of the large file'
+        required: true
+      folder_name:
+        description: 'Timestamp folder name (MMDDHHMMSS) provided by Python script'
+        required: true
+
+jobs:
+  split-and-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download large file into the specified folder
+        run: |
+          mkdir -p "${{ github.event.inputs.folder_name }}"
+          curl --fail -k -L --max-redirs 50 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            -c cookies.txt -b cookies.txt \
+            -o "${{ github.event.inputs.folder_name }}/downloaded_file" \
+            "${{ github.event.inputs.file_url }}"
+
+      - name: Split into 20MB chunks (for 3GB file)
+        run: |
+          FOLDER="${{ github.event.inputs.folder_name }}"
+          FILE_PATH="$FOLDER/downloaded_file"
+          SIZE_MB=$(du -m "$FILE_PATH" | cut -f1)
+
+          if [ "$SIZE_MB" -lt 20 ]; then
+            echo "File is ${SIZE_MB}MB (<20MB) – keeping as single file"
+            mv "$FILE_PATH" "$FOLDER/$FOLDER"
+          else
+            echo "File is ${SIZE_MB}MB – splitting into 20MB chunks"
+            mkdir -p "$FOLDER/chunks"
+            split -b 20M "$FILE_PATH" "$FOLDER/chunks/chunk_"
+            rm "$FILE_PATH"
+          fi
+
+      - name: Configure git
+        run: |
+          git config http.postBuffer 524288000
+          git config http.lowSpeedLimit 0
+          git config http.lowSpeedTime 999999
+
+      - name: Commit and push in tiny batches
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          FOLDER="${{ github.event.inputs.folder_name }}"
+          
+          if [ -f "$FOLDER/$FOLDER" ]; then
+            git add "$FOLDER/$FOLDER"
+            git commit -m "Add $FOLDER"
+            git push
+            exit 0
+          fi
+          
+          if [ -d "$FOLDER/chunks" ]; then
+            cd "$FOLDER/chunks"
+            chunks=(chunk_*)
+            total=${#chunks[@]}
+            batch_size=3   # هر بار فقط ۳ تکه
+            
+            for ((i=0; i<total; i+=batch_size)); do
+              batch=("${chunks[@]:i:batch_size}")
+              for chunk in "${batch[@]}"; do
+                git add "$FOLDER/chunks/$chunk"
+              done
+              git commit -m "Batch $((i/batch_size+1)) for $FOLDER"
+              git push
+              sleep 2   # کمی تأخیر بین push ها
+            done
+            
+            cd ../..
+            git add "$FOLDER"
+            git commit -m "Finalize $FOLDER"
+            git push
+          fi
