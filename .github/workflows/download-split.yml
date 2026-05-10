@@ -51,7 +51,7 @@ jobs:
           git config http.lowSpeedLimit 0
           git config http.lowSpeedTime 999999
 
-      - name: Commit and push in tiny batches
+      - name: Commit and push in tiny batches (fixed path)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -66,23 +66,21 @@ jobs:
           fi
           
           if [ -d "$FOLDER/chunks" ]; then
-            cd "$FOLDER/chunks"
-            chunks=(chunk_*)
+            # استفاده از مسیر درست بدون cd
+            chunks=($(ls "$FOLDER/chunks"/chunk_* 2>/dev/null | xargs -n1 basename))
             total=${#chunks[@]}
-            batch_size=3   # هر بار فقط ۳ تکه
+            batch_size=3
             
             for ((i=0; i<total; i+=batch_size)); do
-              batch=("${chunks[@]:i:batch_size}")
-              for chunk in "${batch[@]}"; do
-                git add "$FOLDER/chunks/$chunk"
+              for ((j=0; j<batch_size && i+j<total; j++)); do
+                git add "$FOLDER/chunks/${chunks[i+j]}"
               done
               git commit -m "Batch $((i/batch_size+1)) for $FOLDER"
               git push
-              sleep 2   # کمی تأخیر بین push ها
+              sleep 2
             done
             
-            cd ../..
             git add "$FOLDER"
-            git commit -m "Finalize $FOLDER"
+            git commit -m "Finalize $FOLDER" || true
             git push
           fi
